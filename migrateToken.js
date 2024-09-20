@@ -202,7 +202,7 @@ async function main() {
 			}
 		}
 
-		strOutput.push(`Mainnet Token ${token} migrated to Testnet ${newToken.toString()}`);
+		strOutput.push(`${tokenDetails.name}: Mainnet Token ${token} migrated to Testnet ${newToken.toString()}`);
 	}
 
 	console.log('Migration complete');
