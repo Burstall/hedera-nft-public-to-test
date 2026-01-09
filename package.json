@@ -16,7 +16,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lazysuperheroes/hedera-nft-utils.git"
+    "url": "git+https://github.com/lazysuperheroes/hedera-nft-public-to-test.git"
   },
   "keywords": [
     "hedera",
@@ -32,9 +32,9 @@
   "author": "Lazy Superheroes",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/lazysuperheroes/hedera-nft-utils/issues"
+    "url": "https://github.com/lazysuperheroes/hedera-nft-public-to-test/issues"
   },
-  "homepage": "https://github.com/lazysuperheroes/hedera-nft-utils#readme",
+  "homepage": "https://github.com/lazysuperheroes/hedera-nft-public-to-test#readme",
   "files": [
     "index.js",
     "migrateToken.js",

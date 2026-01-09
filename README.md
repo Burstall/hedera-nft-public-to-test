@@ -23,7 +23,7 @@ npm install @lazysuperheroes/hedera-nft-utils
 ### From Source
 
 ```bash
-git clone https://github.com/lazysuperheroes/hedera-nft-utils.git
+git clone https://github.com/lazysuperheroes/hedera-nft-public-to-test.git
 cd hedera-nft-utils
 npm install
 ```
@@ -382,6 +382,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Support
 
-- [GitHub Issues](https://github.com/lazysuperheroes/hedera-nft-utils/issues)
+- [GitHub Issues](https://github.com/lazysuperheroes/hedera-nft-public-to-test/issues)
 - [Hedera Documentation](https://docs.hedera.com/)
 - [Hedera Discord](https://discord.gg/hedera)
