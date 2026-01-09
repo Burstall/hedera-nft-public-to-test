@@ -1,0 +1,99 @@
+{
+  "manifest_version": "1.0.0",
+  "description": "Core NFT tokens to migrate for UAT/testing environments",
+  "default_config": {
+    "royalty_mode": "skip",
+    "target_network": "testnet",
+    "batch_size": 10
+  },
+  "tokens": [
+    {
+      "id": "0.0.805923",
+      "name": "Hash Horses",
+      "priority": 1,
+      "enabled": true,
+      "cache_name": "hash-horses"
+    },
+    {
+      "id": "0.0.564539",
+      "name": "Golden Horse",
+      "priority": 2,
+      "enabled": true,
+      "cache_name": "golden-horse"
+    },
+    {
+      "id": "0.0.1992037",
+      "name": "LSD",
+      "priority": 3,
+      "enabled": true,
+      "cache_name": "lsd"
+    },
+    {
+      "id": "0.0.768753",
+      "name": "LSH G1",
+      "priority": 4,
+      "enabled": true,
+      "cache_name": "lsh-g1"
+    },
+    {
+      "id": "0.0.1693200",
+      "name": "LSH G1 Mutants",
+      "priority": 5,
+      "enabled": true,
+      "cache_name": "lsh-g1-mutants"
+    },
+    {
+      "id": "0.0.848553",
+      "name": "LSH G2",
+      "priority": 6,
+      "enabled": true,
+      "cache_name": "lsh-g2"
+    },
+    {
+      "id": "0.0.1195780",
+      "name": "LSH Mobsters",
+      "priority": 7,
+      "enabled": true,
+      "cache_name": "lsh-mobsters"
+    },
+    {
+      "id": "0.0.838959",
+      "name": "LSH Meerkats",
+      "priority": 8,
+      "enabled": true,
+      "cache_name": "lsh-meerkats"
+    }
+  ],
+  "profiles": {
+    "minimal": {
+      "description": "Golden Horse - single token for quick tests",
+      "tokens": ["0.0.564539"]
+    },
+    "ci": {
+      "description": "LSH G1 for CI/CD pipeline testing",
+      "tokens": ["0.0.768753"]
+    },
+    "lsh": {
+      "description": "All Lazy Super Heroes collections",
+      "tokens": ["0.0.768753", "0.0.1693200", "0.0.848553", "0.0.1195780", "0.0.838959"]
+    },
+    "full": {
+      "description": "All core tokens for complete UAT environment",
+      "tokens": [
+        "0.0.805923",
+        "0.0.564539",
+        "0.0.1992037",
+        "0.0.768753",
+        "0.0.1693200",
+        "0.0.848553",
+        "0.0.1195780",
+        "0.0.838959"
+      ]
+    }
+  },
+  "schedule": {
+    "auto_refresh_cache": false,
+    "cache_max_age_hours": 24,
+    "pre_migration_validation": true
+  }
+}

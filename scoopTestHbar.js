@@ -36,12 +36,16 @@ async function scoopTestHbar() {
 	const percent = Number(getArg('percent'));
 	const dryRun = getArgFlag('dry-run') || getArgFlag('dryrun');
 	const minThreshold = getArg('min-threshold') ? Number(getArg('min-threshold')) : 1;
+	const yesFlag = getArgFlag('yes') || getArgFlag('y');
+	const jsonOutput = getArgFlag('json');
 
 	if (getArgFlag('h') || getArgFlag('help')) {
 		console.log('Usage: node scoopTestHbar.js -to 0.0.1234 -percent 50 [options]');
 		console.log('Options:');
 		console.log('  -dry-run        : Preview transfers without executing them');
 		console.log('  -min-threshold N: Minimum HBAR amount to transfer (default: 1)');
+		console.log('  -yes, -y        : Skip confirmation prompt (for CI/CD)');
+		console.log('  -json           : Output results as JSON');
 		process.exit(0);
 	}
 
@@ -199,23 +203,69 @@ async function scoopTestHbar() {
 	console.log('Total to send:', new Hbar(totalToSend, HbarUnit.Tinybar).toString());
 
 	if (dryRun) {
-		console.log('\n**DRY RUN MODE** - No transactions will be executed');
-		console.log('This is a preview of what would be transferred.');
+		if (jsonOutput) {
+			console.log(JSON.stringify({
+				success: true,
+				dryRun: true,
+				message: 'Dry run - no transactions executed',
+				summary: {
+					targetAccount: to.toString(),
+					percentage,
+					accountsCount: filteredAccounts.length,
+					totalToSend: new Hbar(totalToSend, HbarUnit.Tinybar).toString(),
+				},
+			}, null, 2));
+		}
+		else {
+			console.log('\n**DRY RUN MODE** - No transactions will be executed');
+			console.log('This is a preview of what would be transferred.');
+		}
 		process.exit(0);
 	}
 
-	// confirm the send
-	const confirm = readlineSync.keyInYNStrict('Send the above amounts?');
-	if (!confirm) {
-		console.log('Exiting');
-		process.exit(0);
+	// confirm the send (skip if --yes flag provided)
+	if (!yesFlag) {
+		if (!process.stdin.isTTY) {
+			console.error('Error: Running non-interactively without -yes flag');
+			console.error('Use -yes to confirm, or -dry-run to preview');
+			process.exit(2);
+		}
+		const confirm = readlineSync.keyInYNStrict('Send the above amounts?');
+		if (!confirm) {
+			console.log('Exiting');
+			process.exit(0);
+		}
 	}
 
 	// send the amounts
+	const results = [];
 	for (let i = 0; i < filteredAccounts.length; i++) {
 		const amount = new Hbar(Math.floor(Number(filteredBalances[i]) * (percentage / 100)), HbarUnit.Tinybar);
 		const result = await sweepHbar(client, filteredAccounts[i], filteredKeys[i], to, amount);
-		console.log('Sent', amount.toString(), 'from', filteredAccounts[i].toString(), 'to', to.toString(), 'with result', result);
+		results.push({
+			from: filteredAccounts[i].toString(),
+			to: to.toString(),
+			amount: amount.toString(),
+			status: result,
+		});
+		if (!jsonOutput) {
+			console.log('Sent', amount.toString(), 'from', filteredAccounts[i].toString(), 'to', to.toString(), 'with result', result);
+		}
+	}
+
+	// Output final results
+	if (jsonOutput) {
+		console.log(JSON.stringify({
+			success: true,
+			dryRun: false,
+			summary: {
+				targetAccount: to.toString(),
+				percentage,
+				accountsCount: filteredAccounts.length,
+				totalSent: new Hbar(totalToSend, HbarUnit.Tinybar).toString(),
+			},
+			transfers: results,
+		}, null, 2));
 	}
 
 }

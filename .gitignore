@@ -5,3 +5,6 @@ yarn.lock
 
 migration-keys*
 *.json
+
+# Claude Code frameworks (exclude all)
+.claude/

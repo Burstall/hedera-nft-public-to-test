@@ -1,10 +1,14 @@
 {
-  "name": "scripts",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "hedera-nft-migration",
+  "version": "2.0.0",
+  "description": "Hedera NFT migration tools for UAT and test environments",
+  "main": "migrateToken.js",
   "scripts": {
-    "test": ""
+    "lint": "eslint .",
+    "migrate": "node migrateToken.js",
+    "scoop": "node scoopTestHbar.js",
+    "cache": "node migrateToken.js --cache",
+    "list-profiles": "node migrateToken.js --list-profiles"
   },
   "author": "",
   "license": "ISC",
@@ -17,5 +21,8 @@
   },
   "devDependencies": {
     "eslint": "^9.10.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
   }
 }
