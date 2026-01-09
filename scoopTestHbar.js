@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 const {
 	Client,
 	AccountId,
@@ -10,6 +11,7 @@ const { getArgFlag, getArg } = require('./utils/nodeHelpers');
 const readlineSync = require('readline-sync');
 const { checkMirrorHbarBalance } = require('./utils/hederaMirrorHelpers');
 const { sweepHbar } = require('./utils/hederaHelpers');
+const { parsePrivateKeys } = require('./lib/keyUtils');
 
 let operatorId;
 let operatorKey;
@@ -119,7 +121,6 @@ async function scoopTestHbar() {
 	}
 
 	// get the keys from the .env file
-	const keys = [];
 	const keyStrings = process.env.SCOOP_KEYS.split(',');
 
 	if (scoopAccounts.length !== keyStrings.length) {
@@ -130,24 +131,24 @@ async function scoopTestHbar() {
 		process.exit(1);
 	}
 
+	// Parse keys with auto-detection of key type
+	let keys;
 	try {
-		keyStrings.forEach((key) => {
-			const trimmedKey = key.trim();
-			if (trimmedKey.startsWith('e:')) {
-				keys.push(PrivateKey.fromStringECDSA(trimmedKey.substring(2)));
-			}
-			else {
-				keys.push(PrivateKey.fromStringED25519(trimmedKey));
-			}
-		});
+		if (!jsonOutput) {
+			console.log('Parsing private keys (auto-detecting key types)...');
+		}
+		keys = parsePrivateKeys(process.env.SCOOP_KEYS, { verbose: !jsonOutput });
 	}
-	catch {
+	catch (err) {
 		console.log('❌ Invalid SCOOP_KEYS format:');
-		console.log('   Keys should be comma-separated private keys');
-		console.log('   ECDSA keys should be prefixed with "e:"');
+		console.log(`   ${err.message}`);
+		console.log('');
+		console.log('   Keys are auto-detected, but you can use prefixes:');
+		console.log('   - e: or ecdsa: for ECDSA keys');
+		console.log('   - ed: or ed25519: for Ed25519 keys');
 		console.log('');
 		console.log('   Example:');
-		console.log('   SCOOP_KEYS=302e020100300506032b657004220420...,e:0xabc123...');
+		console.log('   SCOOP_KEYS=302e020100300506032b657004220420...,0xabc123...');
 		process.exit(1);
 	}
 

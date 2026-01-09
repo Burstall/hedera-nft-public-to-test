@@ -1,8 +1,12 @@
 {
-  "name": "hedera-nft-migration",
+  "name": "@lazysuperheroes/hedera-nft-utils",
   "version": "2.0.0",
-  "description": "Hedera NFT migration tools for UAT and test environments",
-  "main": "migrateToken.js",
+  "description": "Hedera NFT migration and utility toolkit - migrate NFTs from mainnet to testnet, sweep HBAR across accounts, and more",
+  "main": "index.js",
+  "bin": {
+    "hedera-migrate": "./migrateToken.js",
+    "hedera-scoop": "./scoopTestHbar.js"
+  },
   "scripts": {
     "lint": "eslint .",
     "migrate": "node migrateToken.js",
@@ -10,8 +14,37 @@
     "cache": "node migrateToken.js --cache",
     "list-profiles": "node migrateToken.js --list-profiles"
   },
-  "author": "",
-  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lazysuperheroes/hedera-nft-utils.git"
+  },
+  "keywords": [
+    "hedera",
+    "nft",
+    "hashgraph",
+    "migration",
+    "testnet",
+    "hbar",
+    "blockchain",
+    "crypto",
+    "token"
+  ],
+  "author": "Lazy Superheroes",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/lazysuperheroes/hedera-nft-utils/issues"
+  },
+  "homepage": "https://github.com/lazysuperheroes/hedera-nft-utils#readme",
+  "files": [
+    "index.js",
+    "migrateToken.js",
+    "scoopTestHbar.js",
+    "lib/",
+    "utils/",
+    "config/",
+    "README.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "@hashgraph/sdk": "^2.23.0",
     "axios": "^1.11.0",
