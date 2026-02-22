@@ -21,7 +21,7 @@ const fs = require('fs');
 const { MigrationState } = require('./lib/migrationState');
 const { OutputHandler, EXIT_CODES } = require('./lib/outputHandler');
 const { loadCoreTokens, getTokensForProfile, listProfiles } = require('./lib/coreTokens');
-const { retryWithBackoff, isRetryableError } = require('./lib/asyncHelpers');
+const { retryWithBackoff, isRetryableError, isBurnRetryableError, isBurnAlreadyDoneError } = require('./lib/asyncHelpers');
 const { getBaseURL } = require('./utils/hederaMirrorHelpers');
 
 // Environment variables will be checked in main() when needed
@@ -578,30 +578,42 @@ async function processToken(token, args, client, output) {
 		}
 
 		// --- Mint batch ---
-		const mintTx = new TokenMintTransaction()
-			.setTokenId(newToken)
-			.setMaxTransactionFee(MAX_TX_FEE);
-
 		const batchDeletedFlags = [];
 		const batchMainnetSerials = [];
 		for (let j = i; j < i + BATCH_SIZE && j < nfts.length; j++) {
-			mintTx.addMetadata(Buffer.from(metadata[j]));
 			batchDeletedFlags.push(deleteIds[j]);
 			batchMainnetSerials.push(nfts[j].serial_number);
 		}
 
 		let mintedTestnetSerials;
 		try {
-			const signedTx = await mintTx.freezeWith(client).sign(SUPPLY_KEY);
-			const mintResponse = await signedTx.execute(client);
-			const mintReceipt = await mintResponse.getReceipt(client);
+			// Each retry must build a fresh transaction (new transaction ID required by Hedera)
+			const mintReceipt = await retryWithBackoff(
+				async () => {
+					const tx = new TokenMintTransaction()
+						.setTokenId(newToken)
+						.setMaxTransactionFee(MAX_TX_FEE);
+					for (let j = i; j < i + BATCH_SIZE && j < nfts.length; j++) {
+						tx.addMetadata(Buffer.from(metadata[j]));
+					}
+					const signed = await tx.freezeWith(client).sign(SUPPLY_KEY);
+					const response = await signed.execute(client);
+					return response.getReceipt(client);
+				},
+				{
+					maxRetries: 4,
+					baseDelay: 2000,
+					retryOn: isRetryableError,
+					onRetry: (err, attempt) => output.warn(`Mint batch ${batchIndex} retry ${attempt}: ${err.message}`),
+				},
+			);
 			// SDK returns the assigned testnet serial numbers in mintReceipt.serials
 			mintedTestnetSerials = mintReceipt.serials.map(s => s.toNumber ? s.toNumber() : Number(s));
 			totalMinted += mintedTestnetSerials.length;
 			state.completeMintBatch(batchIndex, batchMainnetSerials);
 		}
 		catch (err) {
-			output.warn(`Batch ${batchIndex} mint failed: ${err.message}`);
+			output.warn(`Batch ${batchIndex} mint failed after retries: ${err.message}`);
 			state.recordError(err.message, { batch: batchIndex });
 			mintErrors++;
 			continue;
@@ -612,22 +624,44 @@ async function processToken(token, args, client, output) {
 		const toBurnNow = mintedTestnetSerials.filter((_, k) => batchDeletedFlags[k]);
 		if (toBurnNow.length > 0) {
 			try {
-				const burnTx = new TokenBurnTransaction()
-					.setTokenId(newToken)
-					.setSerials(toBurnNow)
-					.setMaxTransactionFee(MAX_TX_FEE);
-
-				const burnSigned = await burnTx.freezeWith(client).sign(SUPPLY_KEY);
-				const burnResponse = await burnSigned.execute(client);
-				await burnResponse.getReceipt(client);
+				// Each retry must build a fresh transaction (new transaction ID required by Hedera).
+				// isBurnRetryableError includes FAIL_INVALID: the receipt may have failed to
+				// confirm even though the burn committed on-chain. If a retry comes back with
+				// an "NFT not found" status (isBurnAlreadyDoneError) that confirms the original
+				// burn executed, so we treat it as success rather than an error.
+				await retryWithBackoff(
+					async () => {
+						const tx = new TokenBurnTransaction()
+							.setTokenId(newToken)
+							.setSerials(toBurnNow)
+							.setMaxTransactionFee(MAX_TX_FEE);
+						const signed = await tx.freezeWith(client).sign(SUPPLY_KEY);
+						const response = await signed.execute(client);
+						return response.getReceipt(client);
+					},
+					{
+						maxRetries: 4,
+						baseDelay: 2000,
+						retryOn: isBurnRetryableError,
+						onRetry: (err, attempt) => output.warn(`Burn retry ${attempt} for serials [${toBurnNow.join(', ')}]: ${err.message}`),
+					},
+				);
 
 				state.recordBurns(toBurnNow);
 				totalBurned += toBurnNow.length;
 				output.debug(`Burned serials: ${toBurnNow.join(', ')}`);
 			}
 			catch (err) {
-				output.warn(`Failed to burn serials ${toBurnNow.join(', ')}: ${err.message}`);
-				state.recordError(err.message, { action: 'burn', serials: toBurnNow });
+				if (isBurnAlreadyDoneError(err)) {
+					// The retry got "NFT not found" — the original FAIL_INVALID burn committed.
+					output.debug(`Burn confirmed via retry (NFT already gone) for serials: ${toBurnNow.join(', ')}`);
+					state.recordBurns(toBurnNow);
+					totalBurned += toBurnNow.length;
+				}
+				else {
+					output.warn(`Failed to burn serials ${toBurnNow.join(', ')} after retries: ${err.message}`);
+					state.recordError(err.message, { action: 'burn', serials: toBurnNow });
+				}
 			}
 		}
 
