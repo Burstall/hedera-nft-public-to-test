@@ -21,7 +21,7 @@ const fs = require('fs');
 const { MigrationState } = require('./lib/migrationState');
 const { OutputHandler, EXIT_CODES } = require('./lib/outputHandler');
 const { loadCoreTokens, getTokensForProfile, listProfiles } = require('./lib/coreTokens');
-const { retryWithBackoff, isRetryableError, TransactionPipeline } = require('./lib/asyncHelpers');
+const { retryWithBackoff, isRetryableError } = require('./lib/asyncHelpers');
 const { getBaseURL } = require('./utils/hederaMirrorHelpers');
 
 // Environment variables will be checked in main() when needed
@@ -31,7 +31,6 @@ let testnetOperatorKey;
 // Configuration - can be overridden via environment
 const MAX_TX_FEE = new Hbar(Number(process.env.MAX_TX_FEE) || 80);
 const BATCH_SIZE = Number(process.env.BATCH_SIZE) || 10;
-const CONCURRENT_TXS = Number(process.env.CONCURRENT_TXS) || 3;
 
 const SUPPLY_KEY = process.env.SUPPLY_KEY ? PrivateKey.fromStringED25519(process.env.SUPPLY_KEY) : PrivateKey.generate();
 
@@ -379,12 +378,6 @@ async function main() {
 		client.setOperator(testnetOperatorId, testnetOperatorKey);
 	}
 
-	// Save supply key if auto-generated
-	if (!process.env.SUPPLY_KEY && !args.cacheMode) {
-		output.log('No supply key provided. Generating a new one and saving it to file');
-		saveKeyToFile(tokenList);
-	}
-
 	// Process each token
 	for (const token of tokenList) {
 		await processToken(token, args, client, output);
@@ -488,6 +481,11 @@ async function processToken(token, args, client, output) {
 		output.log(`Resuming migration to existing token ${newToken}`);
 	}
 	else {
+		// Save auto-generated supply key now that we know the token name
+		if (!process.env.SUPPLY_KEY) {
+			output.log('No supply key provided. Generating a new one and saving it to file');
+		}
+
 		// Create new token
 		output.log(`Migrating token ${token} named ${tokenDetails.name} with symbol ${tokenDetails.symbol}`);
 
@@ -535,6 +533,9 @@ async function processToken(token, args, client, output) {
 			newToken = createTokenRx.tokenId;
 			state.setTargetToken(newToken);
 			output.log(`Token ${token} created with ID ${newToken.toString()}`);
+			if (!process.env.SUPPLY_KEY) {
+				saveKeyToFile(token, tokenDetails.name, newToken.toString(), args.network);
+			}
 		}
 		catch (err) {
 			output.error('TX_FAILED', `Token creation failed: ${err.message}`);
@@ -547,100 +548,99 @@ async function processToken(token, args, client, output) {
 	const nfts = data.nfts;
 	state.setTotalNfts(nfts.length);
 
-	const serials = nfts.map(n => n.serial_number);
+	// Sort NFTs by serial ascending so testnet serials are assigned in the same order as mainnet
+	nfts.sort((a, b) => a.serial_number - b.serial_number);
+
 	const metadata = nfts.map(n => n.metadata);
 	const deleteIds = nfts.map(n => n.deleted);
 
-	output.log(`Found ${serials.length} NFTs to migrate`);
+	output.log(`Found ${nfts.length} NFTs to migrate`);
 
-	// Reverse order for proper serial assignment
-	serials.reverse();
-	metadata.reverse();
-	deleteIds.reverse();
-
-	// Mint NFTs with concurrent pipeline
 	const startBatch = args.resume ? state.getNextBatchIndex() : 0;
-	const totalBatches = Math.ceil(serials.length / BATCH_SIZE);
+	const totalBatches = Math.ceil(nfts.length / BATCH_SIZE);
+	let totalMinted = 0;
+	let totalBurned = 0;
+	let mintErrors = 0;
 
-	output.log(`Minting ${serials.length} NFTs in ${totalBatches} batches (starting from batch ${startBatch})`);
+	output.log(`Minting ${nfts.length} NFTs in ${totalBatches} batches (starting from batch ${startBatch}), with interleaved burns to stay within max supply`);
+	output.resetProgress();
 
-	const pipeline = new TransactionPipeline({
-		maxInFlight: CONCURRENT_TXS,
-		onProgress: (completed) => {
-			output.progress(completed + startBatch, totalBatches, 'Minting batches');
-		},
-	});
-
+	// Process each batch sequentially: mint the batch, then immediately burn any
+	// deleted serials from that batch. This keeps the live supply within max_supply
+	// at all times, since burns happen before the next mint batch is submitted.
 	for (let batchIndex = startBatch; batchIndex < totalBatches; batchIndex++) {
 		const i = batchIndex * BATCH_SIZE;
+		const batchStart = Date.now();
 
-		// Skip already completed batches
+		// Skip already completed batches (resume support)
 		if (state.isBatchCompleted(batchIndex)) {
 			continue;
 		}
 
-		await pipeline.submit(`batch-${batchIndex}`, async () => {
-			const mintTx = new TokenMintTransaction()
-				.setTokenId(newToken)
-				.setMaxTransactionFee(MAX_TX_FEE);
+		// --- Mint batch ---
+		const mintTx = new TokenMintTransaction()
+			.setTokenId(newToken)
+			.setMaxTransactionFee(MAX_TX_FEE);
 
-			const batchSerials = [];
-			for (let j = i; j < i + BATCH_SIZE && j < serials.length; j++) {
-				mintTx.addMetadata(Buffer.from(metadata[j]));
-				batchSerials.push(serials[j]);
-			}
+		const batchDeletedFlags = [];
+		const batchMainnetSerials = [];
+		for (let j = i; j < i + BATCH_SIZE && j < nfts.length; j++) {
+			mintTx.addMetadata(Buffer.from(metadata[j]));
+			batchDeletedFlags.push(deleteIds[j]);
+			batchMainnetSerials.push(nfts[j].serial_number);
+		}
 
+		let mintedTestnetSerials;
+		try {
 			const signedTx = await mintTx.freezeWith(client).sign(SUPPLY_KEY);
 			const mintResponse = await signedTx.execute(client);
 			const mintReceipt = await mintResponse.getReceipt(client);
-
-			state.completeMintBatch(batchIndex, batchSerials);
-
-			return mintReceipt;
-		});
-	}
-
-	await pipeline.flush();
-	output.clearProgress();
-
-	const mintSummary = pipeline.getSummary();
-	if (mintSummary.errors.length > 0) {
-		output.warn(`${mintSummary.errors.length} batch(es) failed during minting`);
-		for (const err of mintSummary.errors) {
-			state.recordError(err.error, { batch: err.id });
+			// SDK returns the assigned testnet serial numbers in mintReceipt.serials
+			mintedTestnetSerials = mintReceipt.serials.map(s => s.toNumber ? s.toNumber() : Number(s));
+			totalMinted += mintedTestnetSerials.length;
+			state.completeMintBatch(batchIndex, batchMainnetSerials);
 		}
-	}
+		catch (err) {
+			output.warn(`Batch ${batchIndex} mint failed: ${err.message}`);
+			state.recordError(err.message, { batch: batchIndex });
+			mintErrors++;
+			continue;
+		}
 
-	output.log(`Minted ${mintSummary.completed} batches successfully`);
-
-	// Burn deleted NFTs (collect all and do at end)
-	const toDelete = serials.filter((serial, index) => deleteIds[index]);
-
-	if (toDelete.length > 0) {
-		output.log(`Burning ${toDelete.length} deleted NFTs...`);
-
-		for (let i = 0; i < toDelete.length; i += BATCH_SIZE) {
-			const batch = toDelete.slice(i, i + BATCH_SIZE);
-
+		// --- Immediately burn deleted serials from this batch ---
+		// batchDeletedFlags[k] corresponds to mintedTestnetSerials[k]
+		const toBurnNow = mintedTestnetSerials.filter((_, k) => batchDeletedFlags[k]);
+		if (toBurnNow.length > 0) {
 			try {
-				const deleteTx = new TokenBurnTransaction()
+				const burnTx = new TokenBurnTransaction()
 					.setTokenId(newToken)
-					.setSerials(batch)
+					.setSerials(toBurnNow)
 					.setMaxTransactionFee(MAX_TX_FEE);
 
-				const deleteTxSigned = await deleteTx.freezeWith(client).sign(SUPPLY_KEY);
-				const deleteResponse = await deleteTxSigned.execute(client);
-				await deleteResponse.getReceipt(client);
+				const burnSigned = await burnTx.freezeWith(client).sign(SUPPLY_KEY);
+				const burnResponse = await burnSigned.execute(client);
+				await burnResponse.getReceipt(client);
 
-				state.recordBurns(batch);
-				output.debug(`Burned serials: ${batch.join(', ')}`);
+				state.recordBurns(toBurnNow);
+				totalBurned += toBurnNow.length;
+				output.debug(`Burned serials: ${toBurnNow.join(', ')}`);
 			}
 			catch (err) {
-				output.warn(`Failed to burn serials ${batch.join(', ')}: ${err.message}`);
-				state.recordError(err, { action: 'burn', serials: batch });
+				output.warn(`Failed to burn serials ${toBurnNow.join(', ')}: ${err.message}`);
+				state.recordError(err.message, { action: 'burn', serials: toBurnNow });
 			}
 		}
+
+		output.progress(batchIndex + 1 - startBatch, totalBatches - startBatch, 'Minting batches', Date.now() - batchStart);
 	}
+
+	output.clearProgress();
+
+	if (mintErrors > 0) {
+		output.warn(`${mintErrors} batch(es) failed during minting`);
+	}
+
+	output.log(`Minted ${totalMinted} NFTs, burned ${totalBurned} deleted NFTs`);
 
 	// Mark migration complete
 	state.complete();
@@ -650,8 +650,8 @@ async function processToken(token, args, client, output) {
 		targetToken: newToken.toString(),
 		network: args.network,
 		tokenName: tokenDetails.name,
-		nftsMinted: serials.length,
-		nftsBurned: toDelete.length,
+		nftsMinted: totalMinted,
+		nftsBurned: totalBurned,
 		status: 'completed',
 	});
 
@@ -661,12 +661,19 @@ async function processToken(token, args, client, output) {
 /**
  * Save generated supply key to file
  */
-function saveKeyToFile(tokens) {
-	const startTime = new Date();
-	const timestamp = startTime.toISOString().split('.')[0].replaceAll(':', '-');
-	const filename = `./migration-keys-${timestamp}.txt`;
+function saveKeyToFile(sourceTokenId, tokenName, targetTokenId, network) {
+	const timestamp = new Date().toISOString().split('.')[0].replaceAll(':', '-');
+	const safeName = tokenName.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+	const filename = `./migration-keys-${timestamp}-${safeName}.txt`;
 
-	const outputString = `Mainnet Tokens: ${tokens.join(', ')}\nSupply Key: ${SUPPLY_KEY.toString()}\n`;
+	const outputString = [
+		`Token Name:     ${tokenName}`,
+		`Mainnet Token:  ${sourceTokenId}`,
+		`${network.charAt(0).toUpperCase() + network.slice(1)} Token: ${targetTokenId}`,
+		`Network:        ${network}`,
+		`Supply Key:     ${SUPPLY_KEY.toString()}`,
+		'',
+	].join('\n');
 
 	fs.writeFileSync(filename, outputString, { flag: 'w' });
 	console.log('Token details file created:', filename);
